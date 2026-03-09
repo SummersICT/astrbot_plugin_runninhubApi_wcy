@@ -1,0 +1,42 @@
+{
+    "api_key": {
+        "description": "RunningHub API Key",
+        "type": "string",
+        "default": ""
+    },
+    "workflow_id": {
+        "description": "文生图工作流 ID",
+        "type": "string",
+        "default": ""
+    },
+    "pos_prompt_node_id": {
+        "description": "正向提示词节点 ID",
+        "type": "string",
+        "default": ""
+    },
+    "neg_prompt_node_id": {
+        "description": "反向提示词节点 ID",
+        "type": "string",
+        "default": ""
+    },
+    "default_pos_prompt": {
+        "description": "默认正向提示词",
+        "type": "text",
+        "default": "1girl, masterpiece"
+    },
+    "default_neg_prompt": {
+        "description": "默认反向提示词",
+        "type": "text",
+        "default": "泛黄，发绿，模糊，低分辨率，低质量图像，扭曲的肢体，诡异的外观，丑陋，AI感，噪点，网格感，JPEG压缩条纹，异常的肢体，水印，乱码，意义不明的字符，泛蓝"
+    },
+    "concurrency": {
+        "description": "最大并发生成数量",
+        "type": "int",
+        "default": 1
+    },
+    "use_plus_api": {
+        "description": "是否开启 Plus 模式 (Body 参数控制)",
+        "type": "bool",
+        "default": false
+    }
+}
