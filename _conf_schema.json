@@ -1,42 +1,18 @@
 {
-    "api_key": {
-        "description": "RunningHub API Key",
-        "type": "string",
-        "default": ""
-    },
-    "workflow_id": {
-        "description": "文生图工作流 ID",
-        "type": "string",
-        "default": ""
-    },
-    "pos_prompt_node_id": {
-        "description": "正向提示词节点 ID",
-        "type": "string",
-        "default": ""
-    },
-    "neg_prompt_node_id": {
-        "description": "反向提示词节点 ID",
-        "type": "string",
-        "default": ""
-    },
-    "default_pos_prompt": {
-        "description": "默认正向提示词",
-        "type": "text",
-        "default": "1girl, masterpiece"
-    },
-    "default_neg_prompt": {
-        "description": "默认反向提示词",
-        "type": "text",
-        "default": "泛黄，发绿，模糊，低分辨率，低质量图像，扭曲的肢体，诡异的外观，丑陋，AI感，噪点，网格感，JPEG压缩条纹，异常的肢体，水印，乱码，意义不明的字符，泛蓝"
-    },
-    "concurrency": {
-        "description": "最大并发生成数量",
-        "type": "int",
-        "default": 1
-    },
-    "use_plus_api": {
-        "description": "是否开启 Plus 模式 (Body 参数控制)",
-        "type": "bool",
-        "default": false
-    }
+    "api_key": { "description": "RunningHub API Key", "type": "string", "default": "" },
+    "use_plus_api": { "description": "是否开启 Plus 模式", "type": "bool", "default": true },
+    "concurrency": { "description": "最大并发生成数量", "type": "int", "default": 1 },
+
+    "tti_workflow_id": { "description": "【文生图】工作流 ID", "type": "string", "default": "" },
+    "tti_pos_node_id": { "description": "【文生图】正向提示词节点 ID", "type": "string", "default": "" },
+    "tti_neg_node_id": { "description": "【文生图】反向提示词节点 ID", "type": "string", "default": "" },
+    "tti_default_pos_prompt": { "description": "【文生图】默认正向提示词", "type": "text", "default": "1girl, masterpiece, best quality" },
+    "tti_default_neg_prompt": { "description": "【文生图】默认反向提示词", "type": "text", "default": "low quality, blurry, bad anatomy" },
+
+    "iti_workflow_id": { "description": "【单图生图】工作流 ID", "type": "string", "default": "" },
+    "iti_image_node_id": { "description": "【单图生图】图片输入节点 ID", "type": "string", "default": "" },
+    "iti_pos_node_id": { "description": "【单图生图】正向提示词节点 ID", "type": "string", "default": "" },
+    "iti_neg_node_id": { "description": "【单图生图】反向提示词节点 ID", "type": "string", "default": "" },
+    "iti_default_pos_prompt": { "description": "【单图生图】默认正向提示词", "type": "text", "default": "masterpiece, highly detailed" },
+    "iti_default_neg_prompt": { "description": "【单图生图】默认反向提示词", "type": "text", "default": "low quality, blurred image" }
 }
