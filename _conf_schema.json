@@ -1,18 +1,81 @@
 {
-    "api_key": { "description": "RunningHub API Key", "type": "string", "default": "" },
-    "use_plus_api": { "description": "是否开启 Plus 模式", "type": "bool", "default": true },
-    "concurrency": { "description": "最大并发生成数量", "type": "int", "default": 1 },
-
-    "tti_workflow_id": { "description": "【文生图】工作流 ID", "type": "string", "default": "" },
-    "tti_pos_node_id": { "description": "【文生图】正向提示词节点 ID", "type": "string", "default": "" },
-    "tti_neg_node_id": { "description": "【文生图】反向提示词节点 ID", "type": "string", "default": "" },
-    "tti_default_pos_prompt": { "description": "【文生图】默认正向提示词", "type": "text", "default": "1girl, masterpiece, best quality" },
-    "tti_default_neg_prompt": { "description": "【文生图】默认反向提示词", "type": "text", "default": "low quality, blurry, bad anatomy" },
-
-    "iti_workflow_id": { "description": "【单图生图】工作流 ID", "type": "string", "default": "" },
-    "iti_image_node_id": { "description": "【单图生图】图片输入节点 ID", "type": "string", "default": "" },
-    "iti_pos_node_id": { "description": "【单图生图】正向提示词节点 ID", "type": "string", "default": "" },
-    "iti_neg_node_id": { "description": "【单图生图】反向提示词节点 ID", "type": "string", "default": "" },
-    "iti_default_pos_prompt": { "description": "【单图生图】默认正向提示词", "type": "text", "default": "masterpiece, highly detailed" },
-    "iti_default_neg_prompt": { "description": "【单图生图】默认反向提示词", "type": "text", "default": "low quality, blurred image" }
+    "apiKey": {
+        "description": "API 密钥",
+        "type": "string",
+        "hint": "请输入您的 API Key",
+        "default": ""
+    },
+    "localSaveDir": {
+        "description": "本地图片保存路径",
+        "type": "string",
+        "hint": "绝对或相对路径，例如: ./data/images/ 或 /var/www/html/images/",
+        "default": ""
+    },
+    "serverBaseUrl": {
+        "description": "图片外部访问链接前缀",
+        "type": "string",
+        "hint": "例如: http://你的服务器IP或域名/images/。请确保该链接加上文件名后能被外网访问。",
+        "default": ""
+    },
+    "apiDispatchUrl": {
+        "description": "后端调度接口地址",
+        "type": "string",
+        "hint": "接收组装好的 JSON 请求体的网关/后端地址",
+        "default": ""
+    },
+    "taskWebHook": {
+        "description": "平台任务结束返回信息地址",
+        "type": "string",
+        "hint": "平台任务结束返回信息地址",
+        "default": ""
+    },
+    "singleImageToImage": {
+        "description": "单图生图配置组",
+        "type": "object",
+        "items": {
+            "workflowId": {
+                "description": "工作流 ID",
+                "type": "string",
+                "default": ""
+            },
+            "instanceType": {
+                "description": "是否开启 Plus 模式",
+                "type": "bool",
+                "hint": "勾选以开启当前工作流的 Plus 模式",
+                "default": false
+            },
+            "imageNode": {
+                "description": "【1】图片上传节点配置",
+                "type": "object",
+                "items": {
+                    "nodeType": { "description": "节点类型", "type": "string", "options": ["positivePrompt", "negativePrompt", "image", "video"], "default": "image" },
+                    "nodeId": { "description": "节点 ID", "type": "string", "default": "" },
+                    "nodeName": { "description": "节点名称", "type": "string", "default": "图片上传" },
+                    "fieldName": { "description": "节点属性名", "type": "string", "default": "image" }
+                }
+            },
+            "positiveNode": {
+                "description": "【2】正向提示词节点配置",
+                "type": "object",
+                "items": {
+                    "nodeType": { "description": "节点类型", "type": "string", "options": ["positivePrompt", "negativePrompt", "image", "video"], "default": "positivePrompt" },
+                    "nodeId": { "description": "节点 ID", "type": "string", "default": "" },
+                    "nodeName": { "description": "节点名称", "type": "string", "default": "正向提示词" },
+                    "fieldValue": { "description": "字段默认值", "type": "string", "default": "" },
+                    "fieldName": { "description": "节点属性名", "type": "string", "default": "" }
+                }
+            },
+            "negativeNode": {
+                "description": "【3】反向提示词节点配置",
+                "type": "object",
+                "items": {
+                    "nodeType": { "description": "节点类型", "type": "string", "options": ["positivePrompt", "negativePrompt", "image", "video"], "default": "negativePrompt" },
+                    "nodeId": { "description": "节点 ID", "type": "string", "default": "" },
+                    "nodeName": { "description": "节点名称", "type": "string", "default": "反向提示词" },
+                    "fieldValue": { "description": "字段默认值", "type": "string", "default": "" },
+                    "fieldName": { "description": "节点属性名", "type": "string", "default": "" }
+                }
+            }
+        }
+    }
 }

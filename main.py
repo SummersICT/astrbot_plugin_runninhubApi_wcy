@@ -1,9 +1,12 @@
 import aiohttp
 import asyncio
-import base64
 import ssl
 import os
-from typing import List
+import uuid
+import re
+import time
+import json
+from typing import List, Tuple
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
@@ -11,240 +14,225 @@ from astrbot.api.all import AstrBotConfig
 from astrbot.core.message.components import Image
 
 # ========================================================
-# 📦 封装层：RunningHub 官方 API 客户端 (支持多图返回)
+# 🛠️ 1. 消息来源工具类
+# ========================================================
+class MessageSourceUtil:
+    @staticmethod
+    def get_source_info(event: AstrMessageEvent) -> dict:
+        msg_obj = event.message_obj
+        group_id = getattr(msg_obj, "group_id", None)
+        user_id = event.get_sender_id()
+        
+        sender_name = "User"
+        try:
+            if hasattr(msg_obj, 'raw_event') and msg_obj.raw_event:
+                sender_data = msg_obj.raw_event.get("sender", {})
+                sender_name = sender_data.get("nickname") or sender_data.get("card") or "User"
+        except Exception as e:
+            logger.debug(f"提取昵称失败: {e}")
+
+        return {
+            "isGroup": bool(group_id),
+            "groupId": str(group_id) if group_id else "",
+            "userId": str(user_id),
+            "senderName": sender_name,
+            "type": "GROUP" if group_id else "PRIVATE"
+        }
+
+# ========================================================
+# 📦 2. API 客户端 (适配 Webhook 异步模式)
 # ========================================================
 class RunningHubClient:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.create_url = "https://www.runninghub.cn/task/openapi/create"
-        self.outputs_url = "https://www.runninghub.cn/task/openapi/outputs"
-        # 新增资源上传接口地址
-        self.upload_url = "https://www.runninghub.cn/openapi/v2/media/upload/binary"
-        
+    def __init__(self, api_url: str):
+        self.api_url = api_url
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
 
-    # ==========================================
-    # 🚀 新增：通用媒体上传工具
-    # 适用于图片、音频、视频、ZIP 压缩包
-    # ==========================================
-    async def upload_media(self, file_bytes: bytes, file_name: str = "upload.png") -> str:
-        """上传二进制文件并返回相对路径 (fileName)"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}"
-            # 注意：multipart/form-data 不需要手动设置 Content-Type，aiohttp 会自动处理边界
-        }
+    async def execute_task(self, payload: dict) -> dict:
         connector = aiohttp.TCPConnector(ssl=self.ssl_context)
-
+        headers = {"Content-Type": "application/json"}
+        
         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-            # 构造表单数据
-            form_data = aiohttp.FormData()
-            form_data.add_field('file', file_bytes, filename=file_name)
-            
-            async with session.post(self.upload_url, data=form_data, timeout=60) as resp:
-                result = await resp.json()
-                if result.get("code") != 0:
-                    raise Exception(f"文件上传失败: {result.get('message')} (Code: {result.get('code')})")
+            logger.info(f"🚀 发送请求到 Java 后端: {self.api_url}")
+            async with session.post(self.api_url, json=payload, timeout=120) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise Exception(f"Java 后端响应异常: {resp.status} - {text}")
                 
-                # 返回文档要求的相对路径 fileName
-                return result["data"]["fileName"]
+                result = await resp.json()
+                if result.get("code") != 200:
+                    raise Exception(f"Java 业务报错: {result.get('msg')}")
+                
+                outer_data = result.get("data", {}) 
+                task_id = None
+                if isinstance(outer_data, dict):
+                    task_id = outer_data.get("taskId")
+                    if not task_id and isinstance(outer_data.get("data"), dict):
+                        task_id = outer_data.get("data").get("taskId")
 
-    async def execute_workflow(self, workflow_id: str, node_info_list: list, use_plus: bool = False, max_retries: int = 60) -> List[bytes]:
-        """提交任务并轮询，支持返回多张图片的字节流列表"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}", 
-            "Content-Type": "application/json"
-        }
-        connector = aiohttp.TCPConnector(ssl=self.ssl_context)
-
-        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-            payload = {
-                "apiKey": self.api_key,
-                "workflowId": workflow_id,
-                "nodeInfoList": node_info_list,
-                "instanceType": "plus" if use_plus else "medium"
-            }
-            
-            async with session.post(self.create_url, json=payload, timeout=30) as resp:
-                create_data = await resp.json()
-                if create_data.get("code") != 0:
-                    raise Exception(f"任务提交失败: {create_data.get('msg')} (Code: {create_data.get('code')})")
-                task_id = create_data.get("data", {}).get("taskId")
-
-            for _ in range(max_retries):
-                await asyncio.sleep(5)
-                async with session.post(self.outputs_url, json={"apiKey": self.api_key, "taskId": task_id}, timeout=30) as resp:
-                    data = await resp.json()
-                    status_code = data.get("code")
-                    
-                    if status_code == 0 and data.get("data"):
-                        images_bytes_list = []
-                        for item in data["data"]:
-                            img_url = item.get("fileUrl")
-                            if img_url:
-                                async with session.get(img_url) as img_resp:
-                                    if img_resp.status == 200:
-                                        images_bytes_list.append(await img_resp.read())
-                        
-                        if not images_bytes_list:
-                            raise Exception("接口已完成，但未成功下载到任何图片")
-                        return images_bytes_list
-                        
-                    elif status_code not in (813, 804):
-                        raise Exception(f"生成中断: {data.get('msg')}")
-
-            raise Exception("任务处理超时")
+                if task_id:
+                    logger.info(f"🎯 成功解析出 TaskId: {task_id}")
+                    return {"taskId": task_id}
+                
+                logger.error(f"❌ 原始结构: {result}")
+                raise Exception("无法从 Java 响应中解析出 taskId")
 
 # ========================================================
-# 🤖 插件业务层 (模块化解耦)
+# 🤖 3. 插件业务层
 # ========================================================
-@register("astrbot_plugin_runninhubApi_wcy", "YourName", "RunningHub 终极模块化版", "6.0.0")
+@register("astrbot_plugin_runninhubApi_wcy", "summers", "RunningHub 核心异步插件", "2.4.0")
 class WcyTTIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context) 
         self.config = config
         concurrency = max(1, self.config.get("concurrency", 1))
         self.semaphore = asyncio.Semaphore(concurrency)
+        logger.info("🌟 RunningHub 异步插件已就绪！")
 
-    # ================= 🛠️ 基建层：可复用扩展工具 =================
-    def _parse_prompts(self, prompt_str: str, mode: str) -> tuple:
-        """根据不同的模式 (tti, iti) 动态获取对应的默认提示词"""
-        default_pos = self.config.get(f"{mode}_default_pos_prompt", "").strip()
-        default_neg = self.config.get(f"{mode}_default_neg_prompt", "").strip()
-
-        clean_prompt_str = prompt_str.replace("[图片]", "").strip()
-
-        if not clean_prompt_str:
-            return default_pos, default_neg
-        
-        prompts = clean_prompt_str.split('|', 1)
-        pos_prompt = prompts[0].strip() if prompts[0].strip() else default_pos
-        neg_prompt = prompts[1].strip() if len(prompts) > 1 else default_neg
-        
-        return pos_prompt, neg_prompt
-
-    # ================= 🛠️ 基建层：更新为提取二进制 =================
+    # ----------------- 🛠️ 内部工具 -----------------
+    
     async def _extract_image_bytes(self, event: AstrMessageEvent, max_count: int = 1) -> List[bytes]:
-        """提取用户发送的图片，返回原生二进制数据列表"""
         message_chain = getattr(event.message_obj, "message", [])
         images = [comp for comp in message_chain if isinstance(comp, Image)]
-        
-        if not images:
-            return []
-
+        if not images: return []
         bytes_list = []
         for img_comp in images[:max_count]:
-            img_bytes = b""
-            if getattr(img_comp, "url", None) and str(img_comp.url).startswith("http"):
+            url = getattr(img_comp, "url", None)
+            if url and str(url).startswith("http"):
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(img_comp.url, timeout=30) as resp:
-                        if resp.status == 200:
-                            img_bytes = await resp.read()
-            elif getattr(img_comp, "file", None) or getattr(img_comp, "path", None):
-                path = getattr(img_comp, "file", None) or getattr(img_comp, "path", None)
-                if path and os.path.exists(path):
-                    with open(path, "rb") as f:
-                        img_bytes = f.read()
-            
-            if img_bytes:
-                bytes_list.append(img_bytes)
-
+                    async with session.get(url, timeout=30) as resp:
+                        if resp.status == 200: bytes_list.append(await resp.read())
         return bytes_list
 
-    # ================= 🌟 1. 文生图指令 =================
-    @filter.command("wcy_tti")
-    async def wcy_tti_command(self, event: AstrMessageEvent, *, prompt_str: str = ""):
-        '''文生图: /wcy_tti [正向提示词] | [反向提示词]'''
-        api_key = self.config.get("api_key", "").strip()
-        use_plus = self.config.get("use_plus_api", False)
+    async def _save_local_image(self, image_bytes: bytes, local_save_dir: str, server_base_url: str) -> str:
+        # 1. 确保目录存在
+        if not os.path.exists(local_save_dir):
+            try:
+                os.makedirs(local_save_dir, exist_ok=True)
+                logger.info(f"📂 目录不存在，已自动创建: {os.path.abspath(local_save_dir)}")
+            except Exception as e:
+                logger.error(f"❌ 无法创建图片保存目录: {e}")
+                raise
+
+        # 2. 准备文件路径
+        file_name = f"up_{uuid.uuid4().hex[:8]}_{int(time.time())}.png"
+        file_path = os.path.join(local_save_dir, file_name)
+        abs_path = os.path.abspath(file_path)
+
+        # 3. 写入文件并校验
+        try:
+            with open(file_path, "wb") as f:
+                f.write(image_bytes)
+            
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+                logger.info(f"💾 图片转存成功！\n   📍 绝对路径: {abs_path}\n   ⚖️ 文件大小: {file_size} bytes")
+            else:
+                raise Exception("文件写入校验失败，文件未生成。")
+        except Exception as e:
+            logger.error(f"❌ 写入文件至磁盘失败: {e}")
+            raise
+
+        return server_base_url.rstrip("/") + "/" + file_name
+
+    def _parse_prompt(self, prompt_str: str) -> Tuple[str, str]:
+        clean_prompt = prompt_str.replace("[图片]", "").strip()
+        pos_match = re.search(r"正\[(.*?)\]", clean_prompt, re.DOTALL)
+        neg_match = re.search(r"反\[(.*?)\]", clean_prompt, re.DOTALL)
+        return (pos_match.group(1).strip() if pos_match else "", 
+                neg_match.group(1).strip() if neg_match else "")
+
+    def _build_request_body(self, config_data: dict, api_key: str, taskWebHook: str, action: str, 
+                             node_overrides: dict, params: dict, source_info: dict) -> dict:
+        payload = {
+            "workflowInfo": {
+                "apiKey": api_key,
+                "taskWebHook": taskWebHook,
+                "workflowId": config_data.get("workflowId", ""),
+                "instanceType": "plus" if config_data.get("instanceType") else "standard",
+                "nodeInfoList": []
+            },
+            "action": action,
+            "params": params,
+            "sourceInfo": source_info
+        }
+
+        for key, value in config_data.items():
+            if isinstance(value, dict) and "nodeId" in value:
+                node_conf = value
+                if node_conf.get("nodeId"):
+                    node_item = {
+                        "nodeType": str(node_conf.get("nodeType", "")),
+                        "nodeId": str(node_conf.get("nodeId", "")),
+                        "fieldName": str(node_conf.get("fieldName", "")),
+                        "fieldValue": str(node_conf.get("fieldValue", ""))
+                    }
+                    if key in node_overrides:
+                        node_item.update(node_overrides[key])
+                    payload["workflowInfo"]["nodeInfoList"].append(node_item)
         
-        workflow_id = self.config.get("tti_workflow_id", "").strip()
-        pos_node_id = self.config.get("tti_pos_node_id", "").strip()
-        neg_node_id = self.config.get("tti_neg_node_id", "").strip()
+        return payload
 
-        if not all([api_key, workflow_id, pos_node_id, neg_node_id]):
-            yield event.plain_result("❌ 文生图配置不完整，请检查 WebUI 设置。")
-            return
+    # ----------------- 🌟 指令实现 -----------------
 
-        pos_prompt, neg_prompt = self._parse_prompts(prompt_str, mode="tti")
-
-        node_info_list = [{"nodeId": pos_node_id, "fieldName": "text", "fieldValue": pos_prompt}]
-        if neg_prompt:
-            node_info_list.append({"nodeId": neg_node_id, "fieldName": "text", "fieldValue": neg_prompt})
-
-        queue_msg = "\n🚦 正在为您排队..." if self.semaphore.locked() else ""
-        
-        async def background_task():
-            async with self.semaphore:
-                client = RunningHubClient(api_key=api_key)
-                try:
-                    # 接收字节流列表
-                    img_bytes_list = await client.execute_workflow(workflow_id, node_info_list, use_plus=use_plus)
-                    # 组装多个图片组件
-                    image_components = [Image.fromBytes(b) for b in img_bytes_list]
-                    # 一次性发送所有生成的图片
-                    await event.send(event.chain_result(image_components))
-                except Exception as e:
-                    logger.error(f"文生图错误: {e}")
-                    await event.send(event.plain_result(f"💥 文生图失败: {str(e)}"))
-
-        asyncio.create_task(background_task())
-        yield event.plain_result(f"⏳ [文生图] 已加入后台队列{' (Plus模式)' if use_plus else ''}...{queue_msg}")
-
-   # ================= 🌟 2. 单图生图指令 =================
     @filter.command("wcy_single_iti")
     async def wcy_iti_command(self, event: AstrMessageEvent, *, prompt_str: str = ""):
-        '''图生图: /wcy_single_iti [正向提示词] | [反向提示词] [附带图片]'''
-        api_key = self.config.get("api_key", "").strip()
-        use_plus = self.config.get("use_plus_api", False)
+        logger.info(f"!!!! 拦截到单图生图指令: {prompt_str} !!!!")
         
-        workflow_id = self.config.get("iti_workflow_id", "").strip()
-        img_node_id = self.config.get("iti_image_node_id", "").strip()
-        pos_node_id = self.config.get("iti_pos_node_id", "").strip()
-        neg_node_id = self.config.get("iti_neg_node_id", "").strip()
+        api_key = self.config.get("apiKey", "").strip()
+        local_dir = self.config.get("localSaveDir", "").strip()
+        base_url = self.config.get("serverBaseUrl", "").strip()
+        dispatch_url = self.config.get("apiDispatchUrl", "").strip()
+        taskWebHook = self.config.get("taskWebHook", "").strip()
+        iti_config = self.config.get("singleImageToImage", {})
 
-        if not all([api_key, workflow_id, img_node_id, pos_node_id, neg_node_id]):
-            yield event.plain_result("❌ 单图生图配置不完整，请检查 WebUI 设置。")
-            return
-
-        yield event.plain_result("📥 正在读取并上传源图片，请稍候...")
+        source_info = MessageSourceUtil.get_source_info(event)
         
-        # 1. 获取纯二进制图片
+        # 1. 图片检查
         image_bytes_list = await self._extract_image_bytes(event, max_count=1)
         if not image_bytes_list:
-            yield event.plain_result("❌ 请在发送指令时附带一张图片！\n示例：/wcy_single_iti 赛博朋克 | 模糊 [图片]")
+            yield event.plain_result("📢 哎呀！你是不是忘发图片啦？\n✨ 请在发送指令的时候顺便塞给我一张图哦~")
             return
-            
-        img_bytes = image_bytes_list[0]
-        pos_prompt, neg_prompt = self._parse_prompts(prompt_str, mode="iti")
-        client = RunningHubClient(api_key=api_key)
 
-        queue_msg = "\n🚦 正在为您排队..." if self.semaphore.locked() else ""
-
+        pos, neg = self._parse_prompt(prompt_str)
+        
         async def background_task():
             async with self.semaphore:
                 try:
-                    # 2. 先调用上传接口，获取服务器相对路径
-                    # 这里可以根据文件头简单判断一下后缀
-                    file_ext = "jpg" if img_bytes.startswith(b'\xff\xd8\xff') else "png"
-                    uploaded_file_name = await client.upload_media(img_bytes, file_name=f"input_image.{file_ext}")
+                    # 2. 保存图片
+                    image_web_url = await self._save_local_image(image_bytes_list[0], local_dir, base_url)
                     
-                    # 3. 构造节点数据，填入服务器返回的 fileName
-                    node_info_list = [
-                        {"nodeId": img_node_id, "fieldName": "image", "fieldValue": uploaded_file_name},
-                        {"nodeId": pos_node_id, "fieldName": "text", "fieldValue": pos_prompt}
-                    ]
-                    if neg_prompt:
-                        node_info_list.append({"nodeId": neg_node_id, "fieldName": "text", "fieldValue": neg_prompt})
+                    # 3. 构造 Payload
+                    payload = self._build_request_body(
+                        config_data=iti_config,
+                        api_key=api_key,
+                        taskWebHook=taskWebHook,
+                        action="runningHub:singleImageToImage",
+                        node_overrides={"imageNode": {"fileUrl": image_web_url}},
+                        params={"positivePrompt": pos, "negativePrompt": neg},
+                        source_info=source_info
+                    )
 
-                    # 4. 提交工作流
-                    res_bytes_list = await client.execute_workflow(workflow_id, node_info_list, use_plus=use_plus)
-                    image_components = [Image.fromBytes(b) for b in res_bytes_list]
-                    await event.send(event.chain_result(image_components))
+                    logger.info(f"🚀 任务提交中，Payload 预览: {json.dumps(payload, ensure_ascii=False)[:200]}...")
+
+                    # 4. 执行请求
+                    client = RunningHubClient(dispatch_url)
+                    task_data = await client.execute_task(payload)
+                    logger.info(f"✅ 成功提交至后端！TaskId: {task_data.get('taskId')}")
+                    
                 except Exception as e:
-                    logger.error(f"图生图错误: {e}")
-                    await event.send(event.plain_result(f"💥 图生图失败: {str(e)}"))
+                    logger.error(f"⚠️ 流程异常: {e}")
+                    error_msg = f"呜呜... 画笔突然断掉啦！💦\n原因：{str(e)}\n请检查配置或稍后再试吧~"
+                    await event.send(event.plain_result(error_msg))
 
+        # 启动后台任务
         asyncio.create_task(background_task())
-        yield event.plain_result(f"⏳ [单图生图] 已加入后台队列{' (Plus模式)' if use_plus else ''}...{queue_msg}")
+        
+        # 5. 立即反馈
+        welcome_msg = (
+            "🎯 收到啦！画师已就位~\n"
+            "🎨 正在全力创作你的 3D 手办图中...\n"
+            "🍭 这是一个异步任务，画好后我会立刻飞奔过来送给你的，请耐心等我一下下哦！"
+        )
+        yield event.plain_result(welcome_msg)
